@@ -4,7 +4,7 @@
 
 | Platform           | Support Status | Description                                                 |
 | ------------------ | -------------- | ----------------------------------------------------------- |
-| Linux (x64, arm64) | ✅ Supported   | Ubuntu 20.04+ recommends using pyudev for device monitoring |
+| Linux (x64, arm64, arm32) | ✅ Supported   | The libusb branch uses polling for device monitoring |
 | Windows (x64)      | ✅ Supported   | Supports WMI and polling mode                               |
 | macOS (x64, arm64) | ✅ Supported   | Uses polling mode for device monitoring                     |
 
@@ -50,12 +50,12 @@ pip install -r requirements.txt
 #### 2. System Library Dependencies
 
 ```bash
-sudo apt install -y libudev-dev libusb-1.0-0-dev libhidapi-libusb0
+sudo apt install -y libusb-1.0-0
 ```
 
-> ⚠️ **Important**:
->
-> Must install `libusb-1.0-0-dev` before installing `libhidapi-libusb0`
+This `libusb` branch ships Linux x64, arm64 and arm32 Transport libraries only. Query the loaded backend with `LibUSBHIDAPI.get_hid_backend()` (`4`: libusb, `3`: hidraw, `0`: an older library without the query API). When enumeration lacks Usage, the SDK opens interfaces of registered models to read Usage from the report descriptor and caches the result. Failed or mismatched interfaces are rejected. Hotplug uses polling every 2 seconds and needs neither pyudev nor a running udev service.
+
+Boards still need working USB Host support, accessible `/dev/bus/usb` nodes and the libusb runtime. Without udev, configure USB node permissions through system startup configuration. Prebuilt libraries require glibc 2.17 or later; ARM32 uses the ARMv7 hard-float ABI. musl or other ABIs require cross-compilation. Windows/macOS libraries are not included in this branch.
 
 #### 3. Permission Issues
 

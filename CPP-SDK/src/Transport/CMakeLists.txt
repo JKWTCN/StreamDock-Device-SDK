@@ -26,10 +26,14 @@ add_subdirectory(TransportDLL)
 add_library(TransportCWrapper STATIC TransportCWrapper.cpp)
 
 # Link the C wrapper shared library and hidapi library
-target_link_libraries(TransportCWrapper
-    PUBLIC hidapi::hidapi
-    PRIVATE TransportDLL
-)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(TransportCWrapper PUBLIC hidapi::include TransportDLL)
+else()
+    target_link_libraries(TransportCWrapper
+        PUBLIC hidapi::hidapi
+        PRIVATE TransportDLL
+    )
+endif()
 
 target_include_directories(TransportCWrapper PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/TransportDLL

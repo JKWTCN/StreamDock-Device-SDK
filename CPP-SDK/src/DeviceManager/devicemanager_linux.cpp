@@ -1,84 +1,54 @@
 #include "devicemanager.h"
 #if __linux__
 
-#include <libudev.h>
-#include <poll.h>
+#include <chrono>
 #include <thread>
-#include <iostream>
-#include <mutex>
-#include <string>
-#include <unistd.h>
-#include <cstring>
+#include <unordered_set>
+#include <vector>
 
 void DeviceManager::listen(std::function<void(std::shared_ptr<StreamDock>)> connect_and_run)
 {
+	if (isListening_)
+		return;
 	isListening_ = true;
 	listener_ = std::thread([this, connect_and_run]()
 		{
-			struct udev* udev = udev_new();
-			if (!udev) {
-				ToolKit::print("[ERROR] Failed to initialize udev");
-				return;
-			}
-
-			struct udev_monitor* mon = udev_monitor_new_from_netlink(udev, "udev");
-			udev_monitor_filter_add_match_subsystem_devtype(mon, "hidraw", nullptr);
-			udev_monitor_enable_receiving(mon);
-
-			int fd = udev_monitor_get_fd(mon);
-			struct pollfd fds = { fd, POLLIN, 0 };
-
+			// Poll HIDAPI paths; libusb paths are not /dev/hidraw device nodes.
 			while (isListening_) {
-				int ret = poll(&fds, 1, 500);
-				if (ret > 0 && (fds.revents & POLLIN)) {
-					struct udev_device* dev = udev_monitor_receive_device(mon);
-					if (dev) {
-						std::string action = udev_device_get_action(dev);
-						std::string devNode = udev_device_get_devnode(dev) ? udev_device_get_devnode(dev) : "";
+				DeviceEnumerator::instance().enumerate();
+				std::unordered_set<std::string> currentPaths;
+				for (const auto& device : DeviceEnumerator::instance().currDevices()) {
+					if (StreamDockFactory::instance().exist(device->_vendor_id, device->_product_id) &&
+						StreamDock::isStreamDockHidDeviceUsage(device->toPureHidDeviceInfo()))
+						currentPaths.insert(device->_path);
+				}
 
-						if (!devNode.empty()) {
-							if (action == "add") {
-								/// if the device support begin
-								bool canConnect = false;
-								hid_device_info* devs = hid_enumerate(0x0, 0x0);
-								auto cur = devs;
-								while (cur) {
-									DeviceEnumerator::DeviceInfo device(*cur);
-									if (StreamDockFactory::instance().exist(device._vendor_id, device._product_id) && StreamDock::isStreamDockHidDeviceUsage(device.toPureHidDeviceInfo())/* &&
-										StreamDock::isStreamDockHidDevice(device.toPureHidDeviceInfo())*/ && (cur->path == devNode))
-										canConnect = true;
-									cur = cur->next;
-								}
-								if (!canConnect) {
-									hid_free_enumeration(devs);
-									continue;
-								}
-								hid_free_enumeration(devs);
-								/// if the device support end
-								enumerator();  // Re-enumerate devices
-								std::lock_guard<std::mutex> lock(streamdocksMutex_);
-								auto it = getStreamDocks().find(devNode);
-								if (it != getStreamDocks().end() && connect_and_run) {
-									connect_and_run(it->second);
-								}
-								ToolKit::print("[+] HID Device Added: ", devNode);
-							}
-							else if (action == "remove") {
-								std::lock_guard<std::mutex> lock(streamdocksMutex_);
-								auto& docks = getStreamDocks();
-								if (docks.find(devNode) != docks.end()) {
-									docks.erase(devNode);
-									ToolKit::print("[-] HID Device Removed: ", devNode);
-								}
-							}
+				std::unordered_set<std::string> previousPaths;
+				{
+					std::lock_guard<std::mutex> lock(streamdocksMutex_);
+					for (const auto& entry : streamdocks_)
+						previousPaths.insert(entry.first);
+				}
+
+				if (currentPaths != previousPaths) {
+					enumerator();
+					std::vector<std::shared_ptr<StreamDock>> addedDevices;
+					{
+						std::lock_guard<std::mutex> lock(streamdocksMutex_);
+						for (const auto& entry : streamdocks_) {
+							if (previousPaths.find(entry.first) == previousPaths.end())
+								addedDevices.push_back(entry.second);
 						}
-						udev_device_unref(dev);
+					}
+					// Callbacks may access the manager, so invoke them outside its lock.
+					for (const auto& device : addedDevices) {
+						if (connect_and_run)
+							connect_and_run(device);
 					}
 				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(500));
 			}
-
-			udev_monitor_unref(mon);
-			udev_unref(udev); });
+		});
 }
 
 void DeviceManager::stopListen()

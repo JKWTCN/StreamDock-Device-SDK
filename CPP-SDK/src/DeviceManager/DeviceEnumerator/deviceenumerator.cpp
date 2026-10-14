@@ -2,6 +2,8 @@
 #include <iostream>
 #include <iomanip>
 #include <toolkit.h>
+#include <streamdockfactory.h>
+#include "Transport/TransportDLL/transport_c.h"
 
 DeviceEnumerator::DeviceInfo::DeviceInfo(const hid_device_info& info)
 {
@@ -48,16 +50,50 @@ DeviceEnumerator::~DeviceEnumerator()
 
 void DeviceEnumerator::enumerate(bool log_out)
 {
+	auto previousDevices = std::move(_pathMap);
 	_deviceList.clear();
 	_pathMap.clear();
 	_vidpidMap.clear();
 
-	struct hid_device_info* devs = hid_enumerate(0x0, 0x0);
+	struct hid_device_info* devs = transport_hid_enumerate(0x0, 0x0);
 	struct hid_device_info* cur = devs;
+#if defined(__linux__)
+	const bool usesLibusb = transport_get_hid_backend() == TRANSPORT_HID_BACKEND_LIBUSB;
+#endif
 
 	while (cur)
 	{
 		auto dev = std::make_shared<DeviceInfo>(*cur);
+
+#if defined(__linux__)
+		if (usesLibusb && cur->usage == 0 && cur->usage_page == 0 && cur->path &&
+			StreamDockFactory::instance().exist(cur->vendor_id, cur->product_id))
+		{
+			auto previous = previousDevices.find(dev->_path);
+			if (previous != previousDevices.end() &&
+				previous->second->_vendor_id == dev->_vendor_id &&
+				previous->second->_product_id == dev->_product_id &&
+				previous->second->_usage_page != 0)
+			{
+				dev->_usage = previous->second->_usage;
+				dev->_usage_page = previous->second->_usage_page;
+			}
+			else
+			{
+				// libusb fills Usage from the report descriptor after opening the interface.
+				std::unique_ptr<hid_device, decltype(&hid_close)> handle(hid_open_path(cur->path), hid_close);
+				if (handle)
+				{
+					const auto* openedInfo = hid_get_device_info(handle.get());
+					if (openedInfo)
+					{
+						dev->_usage = openedInfo->usage;
+						dev->_usage_page = openedInfo->usage_page;
+					}
+				}
+			}
+		}
+#endif
 
 		_deviceList.push_back(dev);
 		_pathMap[dev->_path] = dev;
@@ -89,7 +125,7 @@ void DeviceEnumerator::enumerate(bool log_out)
 			ToolKit::print("  Usage:", L"0x", dev->_usage);
 		}
 	}
-	hid_free_enumeration(devs);
+	transport_hid_free_enumeration(devs);
 }
 
 const std::vector<std::shared_ptr<DeviceEnumerator::DeviceInfo>>& DeviceEnumerator::currDevices() const

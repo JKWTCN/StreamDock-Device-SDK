@@ -4,11 +4,16 @@ import time
 from typing import Callable, Optional
 # import pywinusb.hid as hid
 from .ProductIDs import USBVendorIDs, USBProductIDs, g_products
-from .Transport.LibUSBHIDAPI import LibUSBHIDAPI
+from .Transport.LibUSBHIDAPI import LibUSBHIDAPI, HID_BACKEND_LIBUSB
 
 # Platform-specific imports
 if platform.system() == "Linux":
-    import pyudev
+    pyudev = None
+    if LibUSBHIDAPI.get_hid_backend() != HID_BACKEND_LIBUSB:
+        try:
+            import pyudev
+        except ImportError:
+            pass
 elif platform.system() == "Windows":
     try:
         import wmi
@@ -196,7 +201,10 @@ class DeviceManager:
         return devices_to_remove
 
     def _listen_linux(self, products):
-        """Linux uses pyudev to listen for device events"""
+        """Use polling for libusb or systems without pyudev."""
+        if LibUSBHIDAPI.get_hid_backend() == HID_BACKEND_LIBUSB or pyudev is None:
+            self._fallback_polling(products)
+            return
         context = pyudev.Context()
         monitor = pyudev.Monitor.from_netlink(context)
         monitor.filter_by(subsystem="usb")
@@ -246,7 +254,9 @@ class DeviceManager:
 
     def _fallback_polling(self, products):
         """Fall back to polling mode for systems without real-time monitoring"""
-        current_devices = self._current_device_paths(products)
+        # Compare with managed devices so devices already plugged in are added on startup.
+        with self._device_lock:
+            current_devices = {device.getPath() for device in self.streamdocks}
 
         while True:
             try:

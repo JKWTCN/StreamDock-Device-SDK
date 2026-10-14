@@ -16,6 +16,7 @@ a clean, Pythonic interface to the underlying C API.
 import os
 import ctypes
 import platform
+import threading
 from ctypes import (
     POINTER,
     c_size_t,
@@ -181,7 +182,32 @@ _HidDeviceInfo._fields_ = [
     ("usage", ctypes.c_ushort),
     ("interface_number", ctypes.c_int),
     ("next", ctypes.POINTER(_HidDeviceInfo)),
+    ("bus_type", ctypes.c_int),
 ]
+
+HID_BACKEND_UNKNOWN = 0
+HID_BACKEND_WINAPI = 1
+HID_BACKEND_DARWIN = 2
+HID_BACKEND_HIDRAW = 3
+HID_BACKEND_LIBUSB = 4
+
+try:
+    _transport_lib.transport_get_hid_backend.argtypes = []
+    _transport_lib.transport_get_hid_backend.restype = c_uint32
+    _hid_backend = _transport_lib.transport_get_hid_backend()
+except AttributeError:
+    _hid_backend = HID_BACKEND_UNKNOWN
+
+if _hid_backend == HID_BACKEND_LIBUSB:
+    _transport_lib.hid_open_path.argtypes = [c_char_p]
+    _transport_lib.hid_open_path.restype = c_void_p
+    _transport_lib.hid_get_device_info.argtypes = [c_void_p]
+    _transport_lib.hid_get_device_info.restype = POINTER(_HidDeviceInfo)
+    _transport_lib.hid_close.argtypes = [c_void_p]
+    _transport_lib.hid_close.restype = None
+
+_libusb_usage_cache = {}
+_enumeration_lock = threading.RLock()
 
 
 # Define C function signatures
@@ -1030,6 +1056,11 @@ class LibUSBHIDAPI:
     # ========== Static Methods ==========
 
     @staticmethod
+    def get_hid_backend() -> int:
+        """Return the loaded library's HID backend, or 0 for older libraries."""
+        return _hid_backend
+
+    @staticmethod
     def disable_output(disable: bool = True) -> None:
         """
         Globally disable lower-level output (e.g., debug logs).
@@ -1062,6 +1093,7 @@ class LibUSBHIDAPI:
         device_info.usage_page = device_dict.get("usage_page", 0)
         device_info.usage = device_dict.get("usage", 0)
         device_info.interface_number = device_dict.get("interface_number", 0)
+        device_info.bus_type = device_dict.get("bus_type", 0)
         device_info.next = None
         return device_info
 
@@ -1079,18 +1111,44 @@ class LibUSBHIDAPI:
         Returns:
             List of device information dictionaries
         """
+        with _enumeration_lock:
+            return LibUSBHIDAPI._enumerate_devices(vendor_id, product_id)
+
+    @staticmethod
+    def _enumerate_devices(vendor_id: int, product_id: int) -> List[dict]:
         device_list = []
+        seen_paths = set()
+        if _hid_backend == HID_BACKEND_LIBUSB:
+            # Resolve at call time to avoid the ProductIDs/device import cycle.
+            from ..ProductIDs import g_products
+            supported_products = {(vid, pid) for vid, pid, _ in g_products}
         # Use C library's hidapi to avoid conflicts
         dev_info_ptr = _transport_lib.transport_hid_enumerate(vendor_id, product_id)
-
-        if not dev_info_ptr:
-            return device_list
 
         try:
             current = dev_info_ptr
             while current:
                 info = current.contents
-                if info.usage_page > 1025 and info.usage == 1:
+                usage, usage_page = info.usage, info.usage_page
+                key = (info.vendor_id, info.product_id, info.path)
+                seen_paths.add(key)
+                if (_hid_backend == HID_BACKEND_LIBUSB and usage == 0 and usage_page == 0
+                        and info.path and (info.vendor_id, info.product_id) in supported_products):
+                    if key in _libusb_usage_cache:
+                        usage, usage_page = _libusb_usage_cache[key]
+                    else:
+                        handle = _transport_lib.hid_open_path(info.path)
+                        if handle:
+                            try:
+                                opened_info = _transport_lib.hid_get_device_info(handle)
+                                if opened_info:
+                                    usage = opened_info.contents.usage
+                                    usage_page = opened_info.contents.usage_page
+                                    if usage_page:
+                                        _libusb_usage_cache[key] = (usage, usage_page)
+                            finally:
+                                _transport_lib.hid_close(handle)
+                if usage_page == 65440 and usage == 1:
                     device_list.append(
                         {
                             "path": info.path.decode("utf-8") if info.path else "",
@@ -1108,15 +1166,24 @@ class LibUSBHIDAPI:
                                 info.product_string if info.product_string else ""
                             ),
                             "release_number": info.release_number,
-                            "usage_page": info.usage_page,
-                            "usage": info.usage,
+                            "usage_page": usage_page,
+                            "usage": usage,
                             "interface_number": info.interface_number,
+                            "bus_type": info.bus_type,
                         }
                     )
                 current = info.next
         finally:
             # Free the enumeration list
-            _transport_lib.transport_hid_free_enumeration(dev_info_ptr)
+            if dev_info_ptr:
+                _transport_lib.transport_hid_free_enumeration(dev_info_ptr)
+
+        # Drop cached interfaces after removal, limited to this enumeration's VID/PID filter.
+        for key in list(_libusb_usage_cache):
+            if ((not vendor_id or key[0] == vendor_id)
+                    and (not product_id or key[1] == product_id)
+                    and key not in seen_paths):
+                del _libusb_usage_cache[key]
 
         return device_list
 

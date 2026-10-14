@@ -4,7 +4,7 @@
 
 | 平台               | 支持状态 | 说明                                   |
 | ------------------ | -------- | -------------------------------------- |
-| Linux (x64, arm64) | ✅ 支持  | Ubuntu 20.04+ 推荐使用 pyudev 监听设备 |
+| Linux (x64, arm64, arm32) | ✅ 支持  | libusb 分支使用轮询监听设备 |
 | Windows (x64)      | ✅ 支持  | 支持 WMI 和轮询模式                    |
 | macOS (x64,arm64)  | ✅ 支持  | 使用轮询模式监听设备                   |
 
@@ -49,12 +49,12 @@ pip install -r requirements.txt
 #### 2. 系统库依赖
 
 ```bash
-sudo apt install -y libudev-dev libusb-1.0-0-dev libhidapi-libusb0
+sudo apt install -y libusb-1.0-0
 ```
 
-> ⚠️ **重要**：
->
-> 必须先安装 `libusb-1.0-0-dev`，然后再安装 `libhidapi-libusb0`
+此 `libusb` 分支只附带 Linux 的 x64、arm64、arm32 Transport 库。SDK 调用 `LibUSBHIDAPI.get_hid_backend()` 查询当前库后端（`4` 表示 libusb，`3` 表示 hidraw，`0` 表示旧库未提供查询接口）。libusb 枚举缺少 Usage 时，SDK 打开已注册型号的接口读取报告描述符中的 Usage，并缓存结果；读取失败或不匹配的接口不会被接受。热插拔使用每 2 秒一次的轮询，不需要 pyudev 或运行中的 udev 服务。
+
+开发板仍需正常工作的 USB Host、可访问的 `/dev/bus/usb` 节点及 libusb 运行库。无 udev 的系统请通过系统启动配置设置 USB 节点权限。预编译库要求 glibc 2.17 或更新版本，ARM32 使用 ARMv7 hard-float ABI；musl 或其他 ABI 需要重新交叉编译。Windows/macOS 库不包含在本分支中。
 
 #### 3. 权限问题
 

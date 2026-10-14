@@ -161,7 +161,6 @@ elseif(APPLE)
 elseif(UNIX AND NOT APPLE)
     target_link_libraries(${TARGETNAME}
         PRIVATE
-        udev
         pthread
     )
 endif()

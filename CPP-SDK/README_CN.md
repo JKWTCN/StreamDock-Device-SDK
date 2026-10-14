@@ -17,13 +17,19 @@ SDK 中可能依赖一些第三方库，例如：
 - **OpenCV**：用于图像加载与处理；
 - **hidapi**：用于 USB 设备的数据传输与控制；
 - **giflib**：用于 处理动态图片 gif 的处理；
-- 其他系统相关库（如 libudev）。
+- **libusb**：Linux USB 访问。
 
 请根据自身平台及使用需求，参考第二节（Linux 构建）或第三节（Windows 构建），安装所需的依赖库并完成构建流程。
 
 ---
 
 ## 2. 🐧 Linux 构建
+
+此 `libusb` 分支仅附带 Linux x64、arm64、arm32 的 Transport 库。Linux SDK 通过 `transport_get_hid_backend()` 查询实际后端（`TRANSPORT_HID_BACKEND_LIBUSB` 为 `4`），枚举、接口打开和数据传输统一使用 TransportDLL 内置 HIDAPI，不额外链接另一套 HIDAPI。
+
+libusb 枚举的 Usage 为零时，SDK 打开已注册型号的接口读取报告描述符中的 Usage；仅接受 Usage Page 为 `0xFFA0`、Usage 为 `1` 的接口。识别结果在设备连接期间缓存，拔出后清除。Linux 热插拔每 500 ms 轮询一次，不依赖 hidraw 节点或 udev 服务。
+
+开发板需启用 USB Host 并允许程序访问 `/dev/bus/usb`。无 udev 时请通过系统启动配置设置节点权限。预编译 Transport 库要求 glibc 2.17 或更新版本，ARM32 使用 ARMv7 hard-float ABI；musl 或其他 ABI 需要交叉编译。Windows/macOS Transport 库不包含在本分支中。
 
 ### 2.1 依赖安装
 
@@ -32,7 +38,6 @@ SDK 中可能依赖一些第三方库，例如：
 #### 必需依赖项
 
 - **CMake**：构建系统
-- **libudev-dev**：用于监听 USB 设备插拔（仅限 Linux）
 - **libusb-1.0-0-dev**：hidapi 的底层依赖（使用 libusb 版本）
 - **libgif-dev**：gif 图像处理
 
@@ -41,7 +46,7 @@ SDK 中可能依赖一些第三方库，例如：
 ```bash
 sudo apt update
 sudo apt install build-essential cmake
-sudo apt install -y libudev-dev libusb-1.0-0-dev libgif-dev
+sudo apt install -y libusb-1.0-0-dev libgif-dev
 ```
 
 除此之外，SDK 还需要你安装 OpenCV 库。
@@ -223,18 +228,7 @@ make[1]: *** [CMakeFiles/Makefile2:128: StreamDock_CppSDK/CMakeFiles/main.dir/al
 make: *** [Makefile:91: all] Error 2
 ```
 
-解决方法:
-先找到刚刚安装的libusb库
-
-```
-sudo find / -name libhidapi-libusb.so.0
-```
-
-假设说找到的路径为 `/usr/lib/x86_64-linux-gnu/libhidapi-libusb.so.0`，那么你只需要使用如下命令进行替换即可:
-
-```
-sudo cp ./lib/libhidapi-libusb.so.0 /usr/lib/x86_64-linux-gnu
-```
+本分支的 Linux 构建直接使用 `libtransport*.so` 导出的 HIDAPI，不使用系统 HIDAPI。出现此错误时，检查是否使用了本分支配套的 Transport 库和头文件，并删除旧构建配置后重新配置；不要替换系统 HIDAPI 库。
 
 ### 5.2 运行时找不到设备 `find [0] device`
 
@@ -447,7 +441,7 @@ for (const auto& device : streamdocks) {
 - C++17 及以上标准
 - [hidapi](https://github.com/libusb/hidapi) `v0.14.0`
 - [libusb-1.0](https://libusb.info/) `v1.0.27`
-- [libudev](https://github.com/systemd/systemd) `v245`（用于 Linux 设备监听）
+- Linux 设备监听使用轮询，不需要 libudev。
 
 ---
 

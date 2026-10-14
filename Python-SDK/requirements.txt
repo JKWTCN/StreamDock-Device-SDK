@@ -4,6 +4,6 @@ pillow
 # Install with `pip install opencv-python`.
 
 # Platform-specific dependencies
-pyudev ; sys_platform == "linux"
+# Optional: install pyudev for Linux hidraw event monitoring; libusb uses polling.
 wmi ; sys_platform == "win32"
 pywin32 ; sys_platform == "win32"

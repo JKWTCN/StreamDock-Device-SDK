@@ -17,13 +17,19 @@ The SDK may rely on some third-party libraries, including:
 - **OpenCV**: for image loading and processing;
 - **hidapi**: for USB device data transmission and control;
 - **giflib**: for processing animated gif images;
-- Other system-specific dependencies (e.g., libudev).
+- **libusb**: Linux USB access.
 
 Please refer to Section 2 (Linux Build) or Section 3 (Windows Build) for setup instructions based on your platform.
 
 ---
 
 ## 2. 🐧 Linux Build
+
+This `libusb` branch includes Transport libraries for Linux x64, arm64 and arm32 only. The Linux SDK queries the actual backend through `transport_get_hid_backend()` (`TRANSPORT_HID_BACKEND_LIBUSB` is `4`). Enumeration, interface opening and I/O all use TransportDLL's embedded HIDAPI, without linking a second HIDAPI implementation.
+
+When libusb enumeration returns zero Usage, the SDK opens interfaces of registered models to read Usage from their report descriptor. Only Usage Page `0xFFA0` with Usage `1` is accepted. Results are cached while connected and cleared after removal. Linux hotplug polls every 500 ms and requires neither hidraw nodes nor a udev service.
+
+Boards need USB Host support and permission to access `/dev/bus/usb`. Without udev, configure node permissions through system startup configuration. Prebuilt Transport libraries require glibc 2.17 or later; ARM32 uses the ARMv7 hard-float ABI. musl or other ABIs require cross-compilation. Windows/macOS Transport libraries are not included in this branch.
 
 ### 2.1 Dependencies Installation
 
@@ -32,7 +38,6 @@ Before building the SDK, make sure the following dependencies are installed:
 #### Required Packages
 
 - **CMake**: build system
-- **libudev-dev**: to detect USB device events (Linux only)
 - **libusb-1.0-0-dev**: dependency for hidapi (libusb version)
 - **libgif-dev**: for gif image processing
 
@@ -41,7 +46,7 @@ Before building the SDK, make sure the following dependencies are installed:
 ```bash
 sudo apt update
 sudo apt install build-essential cmake
-sudo apt install -y libudev-dev libusb-1.0-0-dev libgif-dev
+sudo apt install -y libusb-1.0-0-dev libgif-dev
 ```
 
 Additionally, the SDK requires the OpenCV library.
@@ -226,19 +231,7 @@ make[1]: *** [CMakeFiles/Makefile2:128: StreamDock_CppSDK/CMakeFiles/main.dir/al
 make: *** [Makefile:91: all] Error 2
 ```
 
-#### Solution:
-
-First, find the installed libhidapi-libusb path:
-
-```bash
-sudo find / -name libhidapi-libusb.so.0
-```
-
-Assume the path is `/usr/lib/x86_64-linux-gnu/libhidapi-libusb.so.0`, replace it with the one provided in `lib/`:
-
-```bash
-sudo cp ./lib/libhidapi-libusb.so.0 /usr/lib/x86_64-linux-gnu
-```
+Linux builds in this branch use HIDAPI exported by `libtransport*.so`, not the system HIDAPI. If this error occurs, check that the Transport library and headers match this branch and reconfigure with a clean build directory. Do not replace system HIDAPI libraries.
 
 ### 4.2 Device not found: `find [0] device`
 
@@ -451,7 +444,7 @@ If no devices are found, please refer to [4.2 Device Not Found](#42-device-not-f
 - C++17 and above standards
 - [hidapi](https://github.com/libusb/hidapi) `v0.14.0`
 - [libusb-1.0](https://libusb.info/) `v1.0.27`
-- [libudev](https://github.com/systemd/systemd) `v245` (for Linux device listening)
+- Linux device monitoring uses polling and does not require libudev.
 
 ---
 

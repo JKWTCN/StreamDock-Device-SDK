@@ -15,4 +15,16 @@ FetchContent_Declare(
     # DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
-FetchContent_MakeAvailable(hidapi)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Linux uses the HIDAPI implementation exported by TransportDLL.
+    # Fetch only the headers to avoid linking a second, possibly different backend.
+    FetchContent_GetProperties(hidapi)
+    if(NOT hidapi_POPULATED)
+        FetchContent_Populate(hidapi)
+    endif()
+    add_library(hidapi_headers INTERFACE)
+    target_include_directories(hidapi_headers INTERFACE "${hidapi_SOURCE_DIR}/hidapi")
+    add_library(hidapi::include ALIAS hidapi_headers)
+else()
+    FetchContent_MakeAvailable(hidapi)
+endif()
