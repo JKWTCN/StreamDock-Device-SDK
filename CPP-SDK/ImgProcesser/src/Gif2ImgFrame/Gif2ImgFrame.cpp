@@ -21,11 +21,19 @@ struct Gif2ImgFrame::Impl
 	{
 		int error = 0;
 		gif = DGifOpenFileName(gifPath.c_str(), &error);
-		if (!gif || DGifSlurp(gif) != GIF_OK)
+		if (!gif)
 		{
-			std::cerr << "Failed to read GIF: " << gifPath << std::endl;
-			if (gif)
-				DGifCloseFile(gif, &error);
+			const char *reason = GifErrorString(error);
+			std::cerr << "Failed to open GIF: " << gifPath << " (giflib error " << error
+				<< ": " << (reason ? reason : "unknown") << ")" << std::endl;
+			return;
+		}
+		if (DGifSlurp(gif) != GIF_OK)
+		{
+			const char *reason = GifErrorString(gif->Error);
+			std::cerr << "Failed to decode GIF: " << gifPath << " (giflib error " << gif->Error
+				<< ": " << (reason ? reason : "unknown") << ")" << std::endl;
+			DGifCloseFile(gif, &error);
 			gif = nullptr;
 			return;
 		}
